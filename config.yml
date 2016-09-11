@@ -1,0 +1,167 @@
+﻿# Built with Flexget 2.3.23
+secrets: config_user.yml
+
+schedules:
+  - tasks: [TV_Series]
+    interval:
+      minutes: 15
+  - tasks: [Trakt_Movies_TorrentDay]
+    interval:
+      hours: 5
+  - tasks: [Get_Premiere_Series, Get_High_Rating]
+    interval:
+      hours: 3
+  - tasks: [Import_Trakt_Movies]
+    interval:
+      hours: 6
+
+     
+templates:  
+  global:
+  # Check there's 20GB Free
+    free_space:
+      path: '{{ secrets.config.mount }}/Downloads/'
+      space: 20000
+    
+  # Link to Transmission  
+  Transmission-RPC:
+    transmission:
+      host: localhost
+      port: 9091
+      addpaused: no
+      ratio: 2.0
+      username: transmission
+      password: '{{ secrets.config.transrpc.passwd }}'
+      
+  # TV Global Settings
+  TV_Global:
+    thetvdb_lookup: yes
+    imdb_lookup: no
+    
+  # TV Configuration
+  TV_Config:
+    series:
+      settings:
+        720_Group:
+          propers: yes
+          exact: yes
+          quality: 720p hdtv h264+
+        480_Group:
+          propers: yes
+          exact: yes
+          quality: sdtv|hdtv <720p h264+
+    include: config_series.yml
+    # Add log file later
+
+  Movie_Global:
+    tmdb_lookup: yes
+    imdb_lookup: no
+
+tasks:
+##############
+###TV Tasks###
+##############
+
+  # TV Series Torrent Day
+  TV_Series:
+    priority: 100
+    inputs:
+      - rss: { url: 'https://www.torrentday.com/torrents/rss?download;26;7;u={{ secrets.service.td.u }};tp={{ secrets.service.td.tp }}', silent: yes, all_entries: no }
+    set:
+      path: '{{ secrets.config.mount }}/Downloads/TV'
+    template:
+      - TV_Global
+      - TV_Config
+      - Transmission-RPC
+
+  # Get Première Series
+  Get_Premiere_Series:
+    priority: 110
+    require_field:
+      - tvdb_genres
+      - tvdb_first_air_date
+    inputs:
+      - rss: { url: 'https://www.torrentday.com/torrents/rss?download;l26;u={{ secrets.service.td.u }};tp={{ secrets.service.td.tp }}', silent: yes, all_entries: no }
+    regexp:
+      reject:
+        - talk show: {from: tvdb_genres}
+        - game show: {from: tvdb_genres}
+        - reality: {from: tvdb_genres}
+        - children: {from: tvdb_genres}
+        - home and garden: {from: tvdb_genres}
+    if:
+      - tvdb_first_air_date != None and tvdb_first_air_date < now - timedelta(days=60): reject
+    series_premiere:
+      propers: yes
+      quality: sdtv|hdtv <720p h264+
+    set:
+      path: '{{ secrets.config.mount }}/Downloads/TV_New'
+    template:
+      - TV_Global
+      - Transmission-RPC
+
+###################
+### MOVIE TASKS ###
+###################
+
+  # Import Movies from Trakt
+  Import_Trakt_Movies:
+    priority: 200
+    trakt_list:
+      username: '{{ secrets.service.trakt.user }}'
+      account: '{{ secrets.service.trakt.account }}'
+      list: watchlist
+      type: movies
+    accept_all: yes
+    list_add:
+      - movie_list: watchlists
+    template:
+      - Movie_Global
+
+  # List add by movie rating
+  Get_High_Rating:
+    priority: 210
+    rss: { url: 'https://www.torrentday.com/t.rss?download;11;48;u={{ secrets.service.td.u }};tp={{ secrets.service.td.tp }}', silent: yes, all_entries: no }
+    proper_movies: yes
+    imdb:
+      min_score: 7.2
+      min_votes: 3000
+      reject_genres:
+        - documentary
+        - musical
+        - biography
+    template:
+      - Movie_Global
+    list_add:
+      - movie_list: watchlists
+      
+  # Get Movies from TorrentDay
+  Trakt_Movies_TorrentDay:
+    priority: 240
+    proper_movies: yes
+    imdb_lookup: yes
+    quality: 720p bluray h264+ dd5.1|dts
+    list_remove:
+      - trakt_list:
+          username: '{{ secrets.service.trakt.user }}'
+          account: '{{ secrets.service.trakt.account }}'
+          list: watchlist
+    regexp:
+      from: title
+      reject:
+        - EXTRAS
+        - SUBPACK
+        - SUBFIX
+    set:
+      path: '{{ secrets.config.mount }}/Downloads/Movies'
+      addpaused: yes
+    discover:
+      what:
+        - movie_list: watchlists
+      from:
+        - search_rss: { url: 'https://www.torrentday.com/t.rss?download;11;48;u={{ secrets.service.td.u }};tp={{ secrets.service.td.tp }}', silent: yes, all_entries: no }
+    template:
+      - Movie_Global
+      - Transmission-RPC
+
+        
